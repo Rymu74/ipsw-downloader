@@ -15,6 +15,12 @@ struct MemoryStruct {
     size_t size;
 };
 
+struct DownloadProgress {
+    struct timeval start_time;
+    curl_off_t dltotal;
+    bool is_html;
+};
+
 static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp) {
     size_t realsize = size * nmemb;
     struct MemoryStruct *mem = (struct MemoryStruct *)userp;
@@ -33,19 +39,63 @@ static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, voi
     return realsize;
 }
 
+int jsonProgressCallback(void *clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow) {
+    struct DownloadProgress *progress = (struct DownloadProgress *)clientp;
+    double progress_ratio = 0.0;
+    double mbps = 0.0;
+
+    progress->dltotal = dltotal;
+
+    if (dltotal > 0) {
+        progress_ratio = (double)dlnow / (double)dltotal;
+    }
+
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    double elapsed_time = (now.tv_sec - progress->start_time.tv_sec) + (now.tv_usec - progress->start_time.tv_usec) / 1000000.0;
+
+    if (elapsed_time > 0) {
+        mbps = (double)dlnow / 1000000.0 / elapsed_time;
+    }
+
+    int barWidth = (int)(progress_ratio * PROGRESS_BAR_WIDTH);
+
+    printf("Downloading JSON (");
+    for (int i = 0; i < PROGRESS_BAR_WIDTH; i++) {
+        if (i < barWidth) {
+            printf("-");
+        } else if (i == barWidth) {
+            printf(">");
+        } else {
+            printf(" ");
+        }
+    }
+    printf(") (%.0f MB/%.0f MB) (%.2f MB/s)\r", (double)dlnow / 1000000.0, (double)dltotal / 1000000.0, mbps);
+    fflush(stdout);
+    return 0;
+}
+
 struct json_object *fetchJSON() {
     CURL *curl;
     CURLcode res;
     struct MemoryStruct chunk;
+    struct DownloadProgress progress;
 
     chunk.memory = malloc(1);
     chunk.size = 0;
 
     curl = curl_easy_init();
     if (curl) {
+        gettimeofday(&progress.start_time, NULL);
+        progress.dltotal = 0;
+        progress.is_html = false;
+
         curl_easy_setopt(curl, CURLOPT_URL, JSON_URL);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, jsonProgressCallback);
+        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &progress);
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
         res = curl_easy_perform(curl);
 
         if (res != CURLE_OK) {
@@ -86,12 +136,6 @@ bool fileExists(const char *filename) {
     return access(filename, F_OK) != -1;
 }
 
-struct DownloadProgress {
-    struct timeval start_time;
-    curl_off_t dltotal;
-    bool is_html;
-};
-
 int progressCallback(void *clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow) {
     struct DownloadProgress *progress = (struct DownloadProgress *)clientp;
     double progress_ratio = 0.0;
@@ -123,7 +167,6 @@ int progressCallback(void *clientp, curl_off_t dltotal, curl_off_t dlnow, curl_o
             printf(" ");
         }
     }
-
     printf(") (%.0f MB/%.0f MB) (%.2f MB/s)\r", (double)dlnow / 1000000.0, (double)dltotal / 1000000.0, mbps);
     fflush(stdout);
     return 0;
@@ -230,6 +273,7 @@ int main(int argc, char *argv[]) {
         printf("Error: Unable to fetch or parse JSON data.\n");
         return 1;
     }
+    printf("\nComplete.\n");
 
     const char *downloadLink = getDownloadLink(json, modelNumber, iosVersion);
     if (downloadLink) {
