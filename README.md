@@ -12,8 +12,11 @@ arch\
 macos\
 ```brew install json-c```
 
-linux
+
+compiling
+
+linux\
 ```cc main.c -o ipsw -lcurl -ljson-c```
 
-macos
+macos\
 ```clang -o ipsw main.c -I/opt/homebrew/opt/json-c/include -L/opt/homebrew/opt/json-c/lib -ljson-c -lcurl```
