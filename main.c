@@ -257,7 +257,7 @@ int main(int argc, char *argv[]) {
     bool useNonSecure = false;
 
     if (argc < 3 || argc > 4) {
-        printf("Usage: %s <model_number> <ios_version> [-u] for unsecure (http) server\n", argv[0]);
+        printf("Usage: %s <identifier> <ios_version> [-u] for unsecure (http) server\n", argv[0]);
         return 1;
     }
 
