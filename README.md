@@ -25,8 +25,8 @@ linux\
 macos\
 ```clang -o ipsw main.c -I/opt/homebrew/opt/json-c/include -L/opt/homebrew/opt/json-c/lib -ljson-c -lcurl```
 
+
 **installing**
-\
 
 linux\
 ```sudo cp ipsw /usr/bin```
