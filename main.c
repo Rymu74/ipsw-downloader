@@ -88,13 +88,16 @@ bool fileExists(const char *filename) {
 
 struct DownloadProgress {
     struct timeval start_time;
-    curl_off_t last_dlnow;
+    curl_off_t dltotal;
+    bool is_html;
 };
 
 int progressCallback(void *clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow) {
     struct DownloadProgress *progress = (struct DownloadProgress *)clientp;
     double progress_ratio = 0.0;
     double mbps = 0.0;
+
+    progress->dltotal = dltotal;
 
     if (dltotal > 0) {
         progress_ratio = (double)dlnow / (double)dltotal;
@@ -126,13 +129,14 @@ int progressCallback(void *clientp, curl_off_t dltotal, curl_off_t dlnow, curl_o
     return 0;
 }
 
-bool downloadFileWithProgress(const char *url, const char *filename) {
+bool downloadFileWithProgress(const char *url, const char *filename, struct DownloadProgress *progress) {
     CURL *curl;
     FILE *file;
-    struct DownloadProgress progress;
+    bool success = false;
 
-    gettimeofday(&progress.start_time, NULL);
-    progress.last_dlnow = 0;
+    gettimeofday(&progress->start_time, NULL);
+    progress->dltotal = 0;
+    progress->is_html = false;
 
     curl = curl_easy_init();
     if (curl) {
@@ -142,23 +146,43 @@ bool downloadFileWithProgress(const char *url, const char *filename) {
             curl_easy_setopt(curl, CURLOPT_WRITEDATA, file);
 
             curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progressCallback);
-            curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &progress);
+            curl_easy_setopt(curl, CURLOPT_XFERINFODATA, progress);
             curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
 
             CURLcode res = curl_easy_perform(curl);
 
             fclose(file);
-            curl_easy_cleanup(curl);
+            if (res == CURLE_OK && progress->dltotal > 0) {
+                file = fopen(filename, "r");
+                if (file) {
+                    char buffer[512];
+                    fread(buffer, 1, sizeof(buffer), file);
+                    if (strstr(buffer, "<HTML>") != NULL || strstr(buffer, "<html>") != NULL) {
+                        progress->is_html = true;
+                    }
+                    fclose(file);
+                }
 
-            if (res == CURLE_OK) {
-                printf("\nFile downloaded successfully.\n");
-                return true;
+                if (!progress->is_html) {
+                    printf("\nFile downloaded successfully.\n");
+                    success = true;
+                } else {
+                    printf("\nError: Received HTML response.\n");
+                    remove(filename);
+                }
+            } else {
+                printf("\nError: File download failed.\n");
+                remove(filename);
             }
+        } else {
+            printf("\nError: Could not open file %s for writing.\n", filename);
         }
+        curl_easy_cleanup(curl);
+    } else {
+        printf("\nError: Could not initialize cURL.\n");
     }
 
-    printf("\nError: File download failed.\n");
-    return false;
+    return success;
 }
 
 const char *extractFilename(const char *url) {
@@ -169,14 +193,37 @@ const char *extractFilename(const char *url) {
     return url;
 }
 
+char *replaceSecureWithNonSecure(const char *url) {
+    const char *securePrefix = "https://secure-appldnld";
+    const char *nonSecurePrefix = "http://appldnld";
+
+    if (strncmp(url, securePrefix, strlen(securePrefix)) == 0) {
+        size_t new_url_length = strlen(url) - strlen(securePrefix) + strlen(nonSecurePrefix);
+        char *new_url = malloc(new_url_length + 1);
+        if (new_url) {
+            strcpy(new_url, nonSecurePrefix);
+            strcat(new_url, url + strlen(securePrefix));
+        }
+        return new_url;
+    }
+
+    return strdup(url);
+}
+
 int main(int argc, char *argv[]) {
-    if (argc != 3) {
-        printf("Usage: %s <model_number> <ios_version>\n", argv[0]);
+    bool useNonSecure = false;
+
+    if (argc < 3 || argc > 4) {
+        printf("Usage: %s <model_number> <ios_version> [-u] for unsecure (http) server\n", argv[0]);
         return 1;
     }
 
     char *modelNumber = argv[1];
     char *iosVersion = argv[2];
+
+    if (argc == 4 && strcmp(argv[3], "-u") == 0) {
+        useNonSecure = true;
+    }
 
     struct json_object *json = fetchJSON();
     if (!json) {
@@ -186,22 +233,42 @@ int main(int argc, char *argv[]) {
 
     const char *downloadLink = getDownloadLink(json, modelNumber, iosVersion);
     if (downloadLink) {
-        const char *filename = extractFilename(downloadLink);
+        char *finalDownloadLink = NULL;
+        if (useNonSecure) {
+            finalDownloadLink = replaceSecureWithNonSecure(downloadLink);
+        } else {
+            finalDownloadLink = strdup(downloadLink);
+        }
+
+        const char *filename = extractFilename(finalDownloadLink);
         if (fileExists(filename)) {
             char response;
             printf("File already exists. Overwrite? (y/n): ");
             scanf(" %c", &response);
             if (response != 'y' && response != 'Y') {
                 printf("Download cancelled.\n");
+                free(finalDownloadLink);
                 json_object_put(json);
                 return 0;
             }
         }
-        
-        printf("Downloading...\n");
-        if (downloadFileWithProgress(downloadLink, filename)) {
-            // Download successful
-        } else {
+
+        printf("Downloading from %s\n", finalDownloadLink);
+
+        struct DownloadProgress progress;
+        bool success = downloadFileWithProgress(finalDownloadLink, filename, &progress);
+
+        if (!success || progress.dltotal == 0 || progress.is_html) {
+            printf("\nRetrying with unsecure server...\n");
+            char *unsecureLink = replaceSecureWithNonSecure(downloadLink);
+            printf("Downloading from %s\n", unsecureLink);
+            success = downloadFileWithProgress(unsecureLink, filename, &progress);
+            free(unsecureLink);
+        }
+
+        free(finalDownloadLink);
+        if (!success) {
+            json_object_put(json);
             return 1;
         }
     } else {
