@@ -1,4 +1,5 @@
 
+
 # :3
 
 json_generator is only used if you are planning to host the json with the download links. i have them on my server\
@@ -25,7 +26,7 @@ linux\
 macos\
 ```clang -o ipsw main.c -I/opt/homebrew/opt/json-c/include -L/opt/homebrew/opt/json-c/lib -ljson-c -lcurl```
 
-
+\
 **installing**
 
 linux\
