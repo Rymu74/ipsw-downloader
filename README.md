@@ -8,7 +8,7 @@ so dont worry abt this file
 **dependencies**
 
 debian\
-```sudo apt install libcurl4-openssl-dev libjson-c-dev\```
+```sudo apt install libcurl4-openssl-dev libjson-c-dev```
 
 arch\
 ```sudo pacman -S libcurl json-c```
