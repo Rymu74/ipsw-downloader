@@ -61,10 +61,10 @@ int jsonProgressCallback(void *clientp, curl_off_t dltotal, curl_off_t dlnow, cu
     int barWidth = (int)(progress_ratio * PROGRESS_BAR_WIDTH);
 
     printf("Downloading JSON (");
-    for (int i = 0; i < PROGRESS_BAR_WIDTH; i++) {
-        if (i < barWidth - 1) {
+    for (int i = 0; i <= PROGRESS_BAR_WIDTH; i++) {
+        if (i < barWidth) {
             printf("-");
-        } else if (i == barWidth - 1) {
+        } else if (i == barWidth) {
             printf(">");
         } else {
             printf(" ");
@@ -158,10 +158,10 @@ int progressCallback(void *clientp, curl_off_t dltotal, curl_off_t dlnow, curl_o
     int barWidth = (int)(progress_ratio * PROGRESS_BAR_WIDTH);
 
     printf("(");
-    for (int i = 0; i < PROGRESS_BAR_WIDTH; i++) {
-        if (i < barWidth - 1) {
+    for (int i = 0; i <= PROGRESS_BAR_WIDTH; i++) {
+        if (i < barWidth) {
             printf("-");
-        } else if (i == barWidth - 1) {
+        } else if (i == barWidth) {
             printf(">");
         } else {
             printf(" ");
@@ -244,58 +244,81 @@ char *replaceSecureWithNonSecure(const char *url) {
         size_t new_url_length = strlen(url) - strlen(securePrefix) + strlen(nonSecurePrefix);
         char *new_url = malloc(new_url_length + 1);
         if (new_url) {
-            snprintf(new_url, new_url_length + 1, "%s%s", nonSecurePrefix, url + strlen(securePrefix));
-            return new_url;
+            strcpy(new_url, nonSecurePrefix);
+            strcat(new_url, url + strlen(securePrefix));
         }
+        return new_url;
     }
-    return NULL;
+
+    return strdup(url);
 }
 
 int main(int argc, char *argv[]) {
-    if (argc != 3) {
-        printf("Usage: %s <model> <iosVersion>\n", argv[0]);
+    bool useNonSecure = false;
+
+    if (argc < 3 || argc > 4) {
+        printf("Usage: %s <identifier> <ios_version> [-u] for unsecure (http) server\n", argv[0]);
         return 1;
     }
 
-    const char *model = argv[1];
-    const char *iosVersion = argv[2];
+    char *modelNumber = argv[1];
+    char *iosVersion = argv[2];
+
+    if (argc == 4 && strcmp(argv[3], "-u") == 0) {
+        useNonSecure = true;
+    }
 
     struct json_object *json = fetchJSON();
     if (!json) {
-        printf("Failed to fetch or parse JSON.\n");
+        printf("Error: Unable to fetch or parse JSON data.\n");
         return 1;
     }
+    printf("\nComplete.\n");
 
-    const char *downloadLink = getDownloadLink(json, model, iosVersion);
-    if (!downloadLink) {
-        printf("Download link not found for model %s and iOS version %s.\n", model, iosVersion);
-        json_object_put(json);
-        return 1;
-    }
-
-    printf("Found download link: %s\n", downloadLink);
-
-    const char *filename = extractFilename(downloadLink);
-    printf("Extracted filename: %s\n", filename);
-
-    if (fileExists(filename)) {
-        printf("File %s already exists. Skipping download.\n", filename);
-        json_object_put(json);
-        return 0;
-    }
-
-    struct DownloadProgress progress;
-    bool success = downloadFileWithProgress(downloadLink, filename, &progress);
-
-    if (!success && progress.is_html) {
-        printf("\nAttempting non-secure download...\n");
-        char *nonSecureLink = replaceSecureWithNonSecure(downloadLink);
-        if (nonSecureLink) {
-            success = downloadFileWithProgress(nonSecureLink, filename, &progress);
-            free(nonSecureLink);
+    const char *downloadLink = getDownloadLink(json, modelNumber, iosVersion);
+    if (downloadLink) {
+        char *finalDownloadLink = NULL;
+        if (useNonSecure) {
+            finalDownloadLink = replaceSecureWithNonSecure(downloadLink);
+        } else {
+            finalDownloadLink = strdup(downloadLink);
         }
+
+        const char *filename = extractFilename(finalDownloadLink);
+        if (fileExists(filename)) {
+            char response;
+            printf("File already exists. Overwrite? (y/n): ");
+            scanf(" %c", &response);
+            if (response != 'y' && response != 'Y') {
+                printf("Download cancelled.\n");
+                free(finalDownloadLink);
+                json_object_put(json);
+                return 0;
+            }
+        }
+
+        printf("Downloading from %s\n", finalDownloadLink);
+
+        struct DownloadProgress progress;
+        bool success = downloadFileWithProgress(finalDownloadLink, filename, &progress);
+
+        if (!success || progress.dltotal == 0 || progress.is_html) {
+            printf("\nRetrying with unsecure server...\n");
+            char *unsecureLink = replaceSecureWithNonSecure(downloadLink);
+            printf("Downloading from %s\n", unsecureLink);
+            success = downloadFileWithProgress(unsecureLink, filename, &progress);
+            free(unsecureLink);
+        }
+
+        free(finalDownloadLink);
+        if (!success) {
+            json_object_put(json);
+            return 1;
+        }
+    } else {
+        printf("Model or iOS version not supported.\n");
     }
 
     json_object_put(json);
-    return success ? 0 : 1;
+    return 0;
 }
